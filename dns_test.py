@@ -1,6 +1,7 @@
 #encoding=utf8
 import struct
 import socket
+import argparse
 
 #                                   1  1  1  1  1  1
 #     0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
@@ -180,4 +181,9 @@ def domain_name_to_ip(domain_name):
 
 HEADER_LEN = 12
 if __name__ == "__main__":
-    print domain_name_to_ip("www.google.com")
+    parser = argparse.ArgumentParser("This is a simple domain name to ip address tool")
+    parser.add_argument("domain_names", nargs = "+")
+    parser.add_argument('--version', action='version', version='%(prog)s 1.0')
+    args = parser.parse_args()
+    for arg in args.domain_names:
+        print arg, "==>", domain_name_to_ip(arg) 
