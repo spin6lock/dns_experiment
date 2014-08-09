@@ -37,6 +37,7 @@ def pack_dns_header(_id, QR, Opcode, AA, TC, RD, RA, Z, RCODE, QDCOUNT, ANCOUNT,
 header = pack_dns_header(_id=1, QR=0, Opcode=0, AA=0, TC=0, RD=1, RA=0, Z=0, RCODE=0,
         QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0)
 
+#   question section format
 #                                   1  1  1  1  1  1
 #     0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
 #   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
@@ -65,17 +66,15 @@ def pack_question_section(domain_name, QTYPE, QCLASS):
     QCLASS = struct.pack(">H", QCLASS) #ask for internet address
     return QNAME + QTYPE + QCLASS
 
-payload = pack_question_section("www.ejoy.com", 1, 1)
-package = header + payload
 
-from scapy.all import *
-c = DNS(id=1,qr=0,opcode=0,tc=0,rd=1,qdcount=1,ancount=0,nscount=0,arcount=0)
-c.qd=DNSQR(qname="www.ejoy.com",qtype=1,qclass=1)
-a = IP(dst="8.8.8.8")
-b = UDP(dport=53)
-resp = sr1(a/b/c)
-print resp[DNS].show()
-print len(resp[DNS])
+#from scapy.all import *
+#c = DNS(id=1,qr=0,opcode=0,tc=0,rd=1,qdcount=1,ancount=0,nscount=0,arcount=0)
+#c.qd=DNSQR(qname="www.ejoy.com",qtype=1,qclass=1)
+#a = IP(dst="8.8.8.8")
+#b = UDP(dport=53)
+#resp = sr1(a/b/c)
+#print resp[DNS].show()
+#print len(resp[DNS])
 
 def unpack_dns_header(rawstr):
     _id = struct.unpack(">h", rawstr[0:2])[0]
@@ -108,60 +107,77 @@ def unpack_dns_header(rawstr):
 #   /                                               /
 #   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 
-def unpack_question_record(rawstring):
+def unpack_name(rawstring, offset):
     labels = []
-    i = 0
+    i = offset
     while True:
         label_length = struct.unpack(">B", rawstring[i])[0]
-        # TODO if label_length > 192 then this is a offset
-        i = i + 1
+        if label_length >= 192: #this is pointer
+            label_length = struct.unpack(">H", rawstring[i:i+2])[0]
+            pointer_offset = label_length & 0x3fff
+            labels, _ = unpack_name(rawstring, pointer_offset)
+            return labels, i + 2
+        else:
+            i = i + 1
         label = struct.unpack("%ds" %label_length, rawstring[i:i+label_length])[0]
         labels.append(label)
         i = i + label_length
         if rawstring[i] == chr(0):
             break
     i += 1
+    return labels, i
+
+def unpack_question_record(rawstring, offset):
+    labels, i = unpack_name(rawstring, offset)
     QTYPE, QCLASS = struct.unpack(">hh", rawstring[i:i+4])
     i += 4
     return labels, QTYPE, QCLASS, i
 
-def unpack_resource_record(rawstring, count):
-    labels = []
-    i = 0
-    while True:
-        label_length = struct.unpack(">B", rawstring[i])[0]
-        # TODO if label_length > 192 then this is a offset
-        if label_length > 192:
-            jump_point = i
-        else:
-            i = i + 1
-            label = struct.unpack("%ds" %label_length, rawstring[i:i+label_length])[0]
-            labels.append(label)
-            print label
-            i = i + label_length
-            if rawstring[i] == chr(0):
-                break
-    i += 1
-    TYPE, CLASS, TTL, RDLENGTH = struct.unpack(">hhIh", rawstring[i:i+(2+2+4+2)])
-    print "type", TYPE
-    print "class", CLASS
-    print "ttl", TTL
-    print "rdlength", RDLENGTH
-    i += 2 + 2 + 4 + 2
-    RDATA = struct.unpack(">%ds" %RDLENGTH, rawstring[i:i+RDLENGTH]) 
-    return labels
+def unpack_resource_record(rawstring, count, offset):
+    result = []
+    for i in xrange(count):
+        rr, offset = unpack_single_resource_record(rawstring, offset)
+        result.append(rr)
+    return result, offset
 
-HEADER_LEN = 12
-if __name__ == "__main__":
+def unpack_single_resource_record(rawstring, offset):
+    labels, i = unpack_name(rawstring, offset)
+    TYPE, CLASS, TTL, RDLENGTH = struct.unpack(">hhIh", rawstring[i:i+(2+2+4+2)])
+    i += 2 + 2 + 4 + 2
+    RDATA = struct.unpack(">%ds" %RDLENGTH, rawstring[i:i+RDLENGTH])[0]
+    return {
+            "labels":labels,
+            "type":TYPE,
+            "class":CLASS,
+            "ttl":TTL,
+            "rdlength":RDLENGTH,
+            "rdata":RDATA,
+        }, i + RDLENGTH
+
+def ipstr_to_4tuple(ipstr):
+    result = ""
+    for i in xrange(3):
+        result += str(ord(ipstr[i])) + "."
+    result += str(ord(ipstr[3]))
+    return result
+
+def domain_name_to_ip(domain_name):
     HOST, PORT = "8.8.8.8", 53
+    payload = pack_question_section(domain_name, 1, 1)
+    package = header + payload
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.sendto(package, (HOST, PORT))
     received = sock.recv(1024)
-    print "received: ", len(received)
     header_info = unpack_dns_header(received)
     answer_count = header_info["ANCOUNT"]
-    answer_part = received[HEADER_LEN:]
-    print "answer_count", answer_count
-    labels, qtype, qclass, remain = unpack_question_record(answer_part)
-    resource_record_part = answer_part[remain:]
-    unpack_resource_record(resource_record_part, answer_count)
+    labels, qtype, qclass, offset = unpack_question_record(received, HEADER_LEN)
+    resource_records, offset = unpack_resource_record(received, answer_count, offset)
+    ips = []
+    for rr in resource_records:
+        if rr["type"] == 1 and rr["class"] == 1:
+            ips.append(ipstr_to_4tuple(rr["rdata"]))
+    return ips
+
+HEADER_LEN = 12
+if __name__ == "__main__":
+    print domain_name_to_ip("www.google.com")
