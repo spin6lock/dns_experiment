@@ -162,13 +162,22 @@ def ipstr_to_4tuple(ipstr):
     result += str(ord(ipstr[3]))
     return result
 
-def domain_name_to_ip(domain_name):
-    HOST, PORT = "8.8.8.8", 53
+def domain_name_to_ip(domain_name, use_tcp):
+    HOST, PORT = "114.114.114.114", 53
     payload = pack_question_section(domain_name, 1, 1)
     package = header + payload
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.sendto(package, (HOST, PORT))
-    received = sock.recv(1024)
+    if use_tcp:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((HOST, PORT))
+        package_size = struct.pack(">h", len(package))
+        sock.sendall(package_size + package)
+        received = sock.recv(1024)
+        received_size = struct.unpack(">h", received[0:2])[0]
+        received = received[2:2+received_size]
+    else:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.sendto(package, (HOST, PORT))
+        received = sock.recv(1024)
     header_info = unpack_dns_header(received)
     answer_count = header_info["ANCOUNT"]
     labels, qtype, qclass, offset = unpack_question_record(received, HEADER_LEN)
@@ -183,7 +192,8 @@ HEADER_LEN = 12
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("This is a simple domain name to ip address tool")
     parser.add_argument("domain_names", nargs = "+")
+    parser.add_argument('--tcp', action='store_true', default=False)
     parser.add_argument('--version', action='version', version='%(prog)s 1.0')
     args = parser.parse_args()
     for arg in args.domain_names:
-        print arg, "==>", domain_name_to_ip(arg) 
+        print arg, "==>", domain_name_to_ip(arg, args.tcp) 
